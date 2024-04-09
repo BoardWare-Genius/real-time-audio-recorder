@@ -8,7 +8,7 @@ var input; 							//MediaStreamAudioSourceNode we'll be recording
 // shim for AudioContext when it's not avb. 
 var AudioContext = window.AudioContext || window.webkitAudioContext;
 var audioContext //audio context to help us record
-var socket;
+
 var recordButton = document.getElementById("recordButton");
 var stopButton = document.getElementById("stopButton");
 var pauseButton = document.getElementById("pauseButton");
@@ -30,7 +30,7 @@ function startRecording() {
 
 	/*
 		Disable the record button until we get a success or fail from getUserMedia() 
-	*/
+*/
 
 	recordButton.disabled = true;
 	stopButton.disabled = false;
@@ -42,7 +42,6 @@ function startRecording() {
 	*/
 
 	navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
-		// socket = new WebSocket("ws://localhost:8080/websocket");
 		console.log("getUserMedia() success, stream created, initializing Recorder.js ...");
 
 		/*
@@ -53,26 +52,26 @@ function startRecording() {
 		*/
 		audioContext = new AudioContext();
 
-		console.log(audioContext);
 		//update the format 
 		document.getElementById("formats").innerHTML = "Format: 1 channel pcm @ " + audioContext.sampleRate / 1000 + "kHz"
 
 		/*  assign to gumStream for later use  */
 		gumStream = stream;
 
+		/* use the stream */
 		input = audioContext.createMediaStreamSource(stream);
-		var channels = input.channelCount;
-		console.log(audioContext.sampleRate, input.channelCount)
-		rec = new Recorder(input,
-			{
-				numChannels: channels,
-			});
-		rec.record()
-		// socket.addEventListener('open', function (event) {
-		// 	socket.send(JSON.stringify({ sampleRate: audioContext.sampleRate, channels: channels, bitsPerSample: 16 }));
 
-		// 	console.log("Recording started");
-		// });
+		/* 
+			Create the Recorder object and configure to record mono sound (1 channel)
+			Recording 2 channels  will double the file size
+		*/
+		rec = new Recorder(input, { numChannels: 1 })
+
+		//start the recording process
+		rec.record()
+
+		console.log("Recording started");
+
 	}).catch(function (err) {
 		//enable the record button if getUserMedia() fails
 		recordButton.disabled = false;
@@ -113,10 +112,10 @@ function stopRecording() {
 	gumStream.getAudioTracks()[0].stop();
 
 	//create the wav blob and pass it on to createDownloadLink
-	rec.exportWAV(createDownloadLink, "audio/wav", socket);
+	rec.exportWAV(createDownloadLink);
 }
 
-function createDownloadLink(blob) {
+function createDownloadLink(blob, result = false) {
 
 	var url = URL.createObjectURL(blob);
 	var au = document.createElement('audio');
@@ -125,7 +124,9 @@ function createDownloadLink(blob) {
 
 	//name of .wav file to use during upload and download (without extendion)
 	var filename = new Date().toISOString();
-
+	if (result) {
+		filename = "回應.wav"
+	}
 	//add controls to the <audio> element
 	au.controls = true;
 	au.src = url;
@@ -145,20 +146,21 @@ function createDownloadLink(blob) {
 	li.appendChild(link);
 
 	//upload link
-	var upload = document.createElement('a');
+	var upload = document.createElement('button');
 	upload.href = "#";
-	upload.innerHTML = "Upload";
+	upload.innerHTML = "發送至Tesou";
 	upload.addEventListener("click", function (event) {
-		var xhr = new XMLHttpRequest();
-		xhr.onload = function (e) {
-			if (this.readyState === 4) {
-				console.log("Server returned: ", e.target.responseText);
-			}
-		};
+		upload.disabled = true;
+		upload.innerHTML = "等待回應中...";
 		var fd = new FormData();
-		fd.append("audio_data", blob, filename);
-		xhr.open("POST", "upload.php", true);
-		xhr.send(fd);
+		fd.append("audio", blob);
+		fetch("http://172.16.4.10:8000?blackbox_name=audio_chat", {
+			method: "POST",
+			body: fd,
+		}).then((response) => response.blob())
+			.then((b) => {
+				createDownloadLink(b);
+			});
 	})
 	li.appendChild(document.createTextNode(" "))//add a space in between
 	li.appendChild(upload)//add the upload link to li

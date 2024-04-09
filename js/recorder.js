@@ -39,12 +39,13 @@
 
             var Recorder = exports.Recorder = (function () {
                 function Recorder(source, cfg) {
-                    var socket = new WebSocket("ws://localhost:8080/websocket");
                     var _this = this;
-                    var count = 0;
+
                     _classCallCheck(this, Recorder);
+
                     this.config = {
                         bufferLen: 4096,
+                        numChannels: 2,
                         mimeType: 'audio/wav'
                     };
                     this.recording = false;
@@ -52,47 +53,26 @@
                         getBuffer: [],
                         exportWAV: []
                     };
+
                     Object.assign(this.config, cfg);
                     this.context = source.context;
-                    this.node = (this.context.createScriptProcessor || this.context.createJavaScriptNode)
-                        .call(this.context, this.config.bufferLen, this.config.numChannels, this.config.numChannels);
-                    socket.onopen = function (event) {
-                        this.node.onaudioprocess = function (e) {
-                            if (!_this.recording) return;
-                            // console.log("channel data:", e.inputBuffer.getChannelData(channel));
-                            var buffer = [];
+                    this.node = (this.context.createScriptProcessor || this.context.createJavaScriptNode).call(this.context, this.config.bufferLen, this.config.numChannels, this.config.numChannels);
 
-                            for (var channel = 0; channel < _this.config.numChannels; channel++) {
-                                buffer.push(e.inputBuffer.getChannelData(channel));
-                            }
+                    this.node.onaudioprocess = function (e) {
+                        if (!_this.recording) return;
 
-                            var buffers2 = [];
-                            for (var channel = 0; channel < numChannels; channel++) {
-                                buffers2.push(mergeBuffers(buffer[channel], buffer[channel].length));
-                            }
-                            var interleaved = undefined;
-                            if (numChannels === 2) {
-                                interleaved = interleave(buffers2[0], buffers2[1]);
-                            } else {
-                                interleaved = buffers2[0];
-                            }
+                        var buffer = [];
+                        for (var channel = 0; channel < _this.config.numChannels; channel++) {
+                            buffer.push(e.inputBuffer.getChannelData(channel));
+                        }
+                        _this.worker.postMessage({
+                            command: 'record',
+                            buffer: buffer
+                        });
+                    };
 
-                            var buffer = new ArrayBuffer(samples.length * 2);
-                            var view = new DataView(buffer);
-
-                            floatTo16BitPCM(view, 0, samples);
-
-                            // _this.worker.postMessage({
-                            //     command: 'record',
-                            //     buffer: buffer
-                            // });
-                        };
-
-                        source.connect(this.node);
-                        this.node.connect(this.context.destination);
-                    }
-
-                    //this should not be necessary
+                    source.connect(this.node);
+                    this.node.connect(this.context.destination); //this should not be necessary
 
                     var self = {};
                     this.worker = new _inlineWorker2.default(function () {
@@ -147,6 +127,8 @@
                             }
                             var dataview = encodeWAV(interleaved);
                             var audioBlob = new Blob([dataview], { type: type });
+
+                            self.postMessage({ command: 'exportWAV', data: audioBlob });
                         }
 
                         function getBuffer() {
@@ -208,36 +190,38 @@
                         }
 
                         function encodeWAV(samples) {
-                            var buffer = new ArrayBuffer(samples.length * 2);
+                            var buffer = new ArrayBuffer(44 + samples.length * 2);
                             var view = new DataView(buffer);
 
-                            ///* RIFF identifier */
-                            //writeString(view, 0, 'RIFF');
-                            ///* RIFF chunk length */
-                            //view.setUint32(4, 36 + samples.length * 2, true);
-                            ///* RIFF type */
-                            //writeString(view, 8, 'WAVE');
-                            ///* format chunk identifier */
-                            //writeString(view, 12, 'fmt ');
-                            ///* format chunk length */
-                            //view.setUint32(16, 16, true);
-                            ///* sample format (raw) */
-                            //view.setUint16(20, 1, true);
-                            ///* channel count */
-                            //view.setUint16(22, numChannels, true);
-                            ///* sample rate */
-                            //view.setUint32(24, sampleRate, true);
-                            ///* byte rate (sample rate * block align) */
-                            //view.setUint32(28, sampleRate * 4, true);
-                            ///* block align (channel count * bytes per sample) */
-                            //view.setUint16(32, numChannels * 2, true);
-                            ///* bits per sample */
-                            //view.setUint16(34, 16, true);
-                            ///* data chunk identifier */
-                            //writeString(view, 36, 'data');
-                            ///* data chunk length */
-                            //view.setUint32(40, samples.length * 2, true);
-                            floatTo16BitPCM(view, 0, samples);
+                            /* RIFF identifier */
+                            writeString(view, 0, 'RIFF');
+                            /* RIFF chunk length */
+                            view.setUint32(4, 36 + samples.length * 2, true);
+                            /* RIFF type */
+                            writeString(view, 8, 'WAVE');
+                            /* format chunk identifier */
+                            writeString(view, 12, 'fmt ');
+                            /* format chunk length */
+                            view.setUint32(16, 16, true);
+                            /* sample format (raw) */
+                            view.setUint16(20, 1, true);
+                            /* channel count */
+                            view.setUint16(22, numChannels, true);
+                            /* sample rate */
+                            view.setUint32(24, sampleRate, true);
+                            /* byte rate (sample rate * block align) */
+                            view.setUint32(28, sampleRate * 4, true);
+                            /* block align (channel count * bytes per sample) */
+                            view.setUint16(32, numChannels * 2, true);
+                            /* bits per sample */
+                            view.setUint16(34, 16, true);
+                            /* data chunk identifier */
+                            writeString(view, 36, 'data');
+                            /* data chunk length */
+                            view.setUint32(40, samples.length * 2, true);
+
+                            floatTo16BitPCM(view, 44, samples);
+
                             return view;
                         }
                     }, self);
@@ -285,9 +269,7 @@
                     }
                 }, {
                     key: 'exportWAV',
-                    value: function exportWAV(cb, mimeType, socket) {
-                        console.log("mimeType", mimeType)
-                        console.log("socket", socket)
+                    value: function exportWAV(cb, mimeType) {
                         mimeType = mimeType || this.config.mimeType;
                         cb = cb || this.config.callback;
                         if (!cb) throw new Error('Callback not set');
@@ -296,7 +278,7 @@
 
                         this.worker.postMessage({
                             command: 'exportWAV',
-                            type: mimeType,
+                            type: mimeType
                         });
                     }
                 }], [{
